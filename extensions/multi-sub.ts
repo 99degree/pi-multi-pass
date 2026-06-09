@@ -89,6 +89,7 @@ interface ProviderTemplate {
 	displayName: string;
 	builtinOAuth: OAuthProviderInterface;
 	usesCallbackServer?: boolean;
+	useOAuth?: boolean;
 	buildOAuth(index: number): Omit<OAuthProviderInterface, "id">;
 	buildModifyModels?(providerName: string): OAuthProviderInterface["modifyModels"];
 }
@@ -240,11 +241,12 @@ const PROVIDER_TEMPLATES: Record<string, ProviderTemplate> = {
 
 	"nvidia": {
 		displayName: "NVIDIA (NVIDIA AI Foundry / NIM)",
+		useOAuth: false,
 		builtinOAuth: {
 			id: "nvidia",
 			name: "NVIDIA",
 			async login(): Promise<OAuthCredentials> {
-				throw new Error("NVIDIA uses API key, not OAuth. Use /subs login to configure.");
+				throw new Error("NVIDIA uses API key, not OAuth.");
 			},
 			async refreshToken(credentials: OAuthCredentials): Promise<OAuthCredentials> {
 				return credentials;
@@ -258,7 +260,7 @@ const PROVIDER_TEMPLATES: Record<string, ProviderTemplate> = {
 				name: `NVIDIA #${index}`,
 				async login(callbacks: OAuthLoginCallbacks): Promise<OAuthCredentials> {
 					const apiKey = await callbacks.onPrompt({
-						message: `Enter NVIDIA API key for subscription #${index} (will be stored in auth.json):`,
+						message: `Enter NVIDIA API key for subscription #${index}:`,
 					});
 					if (!apiKey?.trim()) {
 						throw new Error("NVIDIA API key is required.");
@@ -1950,7 +1952,7 @@ function registerSub(pi: ExtensionAPI, entry: SubEntry): void {
 	pi.registerProvider(name, {
 		baseUrl,
 		api: builtinModels[0]?.api,
-		oauth: modifyModels ? { ...oauth, modifyModels } : oauth,
+		...(template.useOAuth !== false ? { oauth: modifyModels ? { ...oauth, modifyModels } : oauth } : {}),
 		models,
 	});
 }
