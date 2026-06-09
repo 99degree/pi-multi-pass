@@ -1952,7 +1952,9 @@ function registerSub(pi: ExtensionAPI, entry: SubEntry): void {
 	pi.registerProvider(name, {
 		baseUrl,
 		api: builtinModels[0]?.api,
-		...(template.useOAuth !== false ? { oauth: modifyModels ? { ...oauth, modifyModels } : oauth } : {}),
+		...(template.useOAuth !== false
+			? { oauth: modifyModels ? { ...oauth, modifyModels } : oauth }
+			: { apiKey: "" }),
 		models,
 	});
 }
