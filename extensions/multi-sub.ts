@@ -3234,10 +3234,23 @@ async function handleSubsLogin(ctx: ExtensionCommandContext): Promise<void> {
 	const entry = notLoggedIn.find((candidate) => subProviderName(candidate) === selectedProviderName);
 	if (!entry) return;
 
-	ctx.ui.notify(
-		`Use /login and select "${PROVIDER_TEMPLATES[entry.provider]?.buildOAuth(entry.index).name}" to authenticate.`,
-		"info",
-	);
+	const templ = PROVIDER_TEMPLATES[entry.provider];
+	if (templ?.useOAuth === false) {
+		const apiKey = await ctx.ui.prompt({
+			message: `Enter API key for ${subProviderName(entry)}:`,
+		});
+		if (apiKey?.trim()) {
+			ctx.modelRegistry.authStorage.set(subProviderName(entry), { type: "api_key", key: apiKey.trim() });
+			ctx.ui.notify(`API key saved for ${subProviderName(entry)}.`, "success");
+		} else {
+			ctx.ui.notify("No API key entered.", "warning");
+		}
+	} else {
+		ctx.ui.notify(
+			`Use /login → "Use a subscription" → select "${templ?.buildOAuth(entry.index).name}" to authenticate.`,
+			"info",
+		);
+	}
 }
 
 async function handleSubsLogout(ctx: ExtensionCommandContext): Promise<void> {
