@@ -3236,9 +3236,7 @@ async function handleSubsLogin(ctx: ExtensionCommandContext): Promise<void> {
 
 	const templ = PROVIDER_TEMPLATES[entry.provider];
 	if (templ?.useOAuth === false) {
-		const apiKey = await ctx.ui.prompt({
-			message: `Enter API key for ${subProviderName(entry)}:`,
-		});
+		const apiKey = await ctx.ui.input(`Enter API key for ${subProviderName(entry)}:`);
 		if (apiKey?.trim()) {
 			ctx.modelRegistry.authStorage.set(subProviderName(entry), { type: "api_key", key: apiKey.trim() });
 			ctx.ui.notify(`API key saved for ${subProviderName(entry)}.`, "success");
