@@ -237,6 +237,47 @@ const PROVIDER_TEMPLATES: Record<string, ProviderTemplate> = {
 			};
 		},
 	},
+
+	"nvidia": {
+		displayName: "NVIDIA (NVIDIA AI Foundry / NIM)",
+		builtinOAuth: {
+			id: "nvidia",
+			name: "NVIDIA",
+			async login(): Promise<OAuthCredentials> {
+				throw new Error("NVIDIA uses API key, not OAuth. Use /subs login to configure.");
+			},
+			async refreshToken(credentials: OAuthCredentials): Promise<OAuthCredentials> {
+				return credentials;
+			},
+			getApiKey(credentials: OAuthCredentials): string {
+				return credentials.access;
+			},
+		},
+		buildOAuth(index: number) {
+			return {
+				name: `NVIDIA #${index}`,
+				async login(callbacks: OAuthLoginCallbacks): Promise<OAuthCredentials> {
+					const apiKey = await callbacks.onPrompt({
+						message: `Enter NVIDIA API key for subscription #${index} (will be stored in auth.json):`,
+					});
+					if (!apiKey?.trim()) {
+						throw new Error("NVIDIA API key is required.");
+					}
+					return {
+						access: apiKey.trim(),
+						refresh: "",
+						expires: Date.now() + 365 * 24 * 60 * 60 * 1000,
+					};
+				},
+				async refreshToken(credentials: OAuthCredentials): Promise<OAuthCredentials> {
+					return credentials;
+				},
+				getApiKey(credentials: OAuthCredentials): string {
+					return credentials.access;
+				},
+			};
+		},
+	},
 };
 
 const SUPPORTED_PROVIDERS = Object.keys(PROVIDER_TEMPLATES);
