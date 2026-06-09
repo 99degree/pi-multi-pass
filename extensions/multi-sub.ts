@@ -1954,7 +1954,7 @@ function registerSub(pi: ExtensionAPI, entry: SubEntry): void {
 		api: builtinModels[0]?.api,
 		...(template.useOAuth !== false
 			? { oauth: modifyModels ? { ...oauth, modifyModels } : oauth }
-			: { apiKey: "" }),
+			: { apiKey: "placeholder" }),
 		models,
 	});
 }
