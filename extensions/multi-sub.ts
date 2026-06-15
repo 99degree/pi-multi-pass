@@ -2016,23 +2016,8 @@ function registerSub(pi: ExtensionAPI, entry: SubEntry): void {
 	const templateModels = template.models;
 	const baseUrl = builtinModels[0]?.baseUrl || templateModels?.[0]?.baseUrl || "";
 	const models = builtinModels.length > 0
-	  ? cloneModels(entry.provider, entry.index)
-	  : (templateModels
-	      ? templateModels.map((m) => ({
-	          id: m.id,
-	          name: `${m.name} (#${entry.index})`,
-	          api: m.api,
-	          baseUrl: m.baseUrl,
-	          reasoning: m.reasoning,
-	          thinkingLevelMap: m.thinkingLevelMap ? { ...m.thinkingLevelMap } : undefined,
-	          input: m.input as ("text" | "image")[],
-	          cost: { ...m.cost },
-	          contextWindow: m.contextWindow,
-	          maxTokens: m.maxTokens,
-	          headers: m.headers ? { ...m.headers } : undefined,
-	          compat: m.compat,
-	        }))
-	      : []);
+	  ? [...cloneModels(entry.provider, entry.index), ...(templateModels || [])]
+	  : (templateModels || []);
 
 	pi.registerProvider(name, {
 		baseUrl,
