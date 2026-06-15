@@ -30,6 +30,8 @@
  *   - github-copilot     (GitHub Copilot)
  *   - google-gemini-cli  (Google Cloud Code Assist)
  *   - google-antigravity (Antigravity)
+ * - nvidia (NVIDIA AI Foundry / NIM)
+ * - morph-llm (Morph LLM)
  */
 
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from "fs";
@@ -89,7 +91,7 @@ interface ProviderTemplate {
 	displayName: string;
 	builtinOAuth: OAuthProviderInterface;
 	usesCallbackServer?: boolean;
-	useOAuth?: boolean;
+	useOAuth?: boolean; models?: Model<Api>[];
 	buildOAuth(index: number): Omit<OAuthProviderInterface, "id">;
 	buildModifyModels?(providerName: string): OAuthProviderInterface["modifyModels"];
 }
@@ -242,7 +244,7 @@ const PROVIDER_TEMPLATES: Record<string, ProviderTemplate> = {
 	"nvidia": {
 		displayName: "NVIDIA (NVIDIA AI Foundry / NIM)",
 		useOAuth: false,
-		builtinOAuth: {
+ models: [{ id: "nvidia-default", name: "NVIDIA Default", api: "openai", baseUrl: "https://api.nvidia.com/v1", reasoning: false, input: ["text"], cost: { input: 0, output: 0 }, contextWindow: 32768, maxTokens: 4096, }],		builtinOAuth: {
 			id: "nvidia",
 			name: "NVIDIA",
 			async login(): Promise<OAuthCredentials> {
@@ -280,6 +282,71 @@ const PROVIDER_TEMPLATES: Record<string, ProviderTemplate> = {
 			};
 		},
 	},
+  "morph-llm": {
+    displayName: "Morph LLM",
+    useOAuth: false,
+    models: [
+      {
+        id: "morph-qwen35-397b",
+        name: "Morph Qwen35-397B",
+        api: "openai",
+        baseUrl: "https://api.morphllm.com/v1",
+        reasoning: false,
+        input: ["text"],
+        cost: { input: 0, output: 0 },
+        contextWindow: 32768,
+        maxTokens: 4096,
+      },
+      {
+        id: "morph-qwen36-27b",
+        name: "Morph Qwen36-27B",
+        api: "openai",
+        baseUrl: "https://api.morphllm.com/v1",
+        reasoning: false,
+        input: ["text"],
+        cost: { input: 0, output: 0 },
+        contextWindow: 32768,
+        maxTokens: 4096,
+      },
+    ],
+    builtinOAuth: {
+      id: "morph-llm",
+      name: "Morph LLM",
+      async login(): Promise<OAuthCredentials> {
+        throw new Error("Morph LLM uses API key, not OAuth.");
+      },
+      async refreshToken(credentials: OAuthCredentials): Promise<OAuthCredentials> {
+        return credentials;
+      },
+      getApiKey(credentials: OAuthCredentials): string {
+        return credentials.access;
+      },
+    },
+    buildOAuth(index: number) {
+      return {
+        name: `Morph LLM #${index}`,
+        async login(callbacks: OAuthLoginCallbacks): Promise<OAuthCredentials> {
+          const apiKey = await callbacks.onPrompt({
+            message: `Enter Morph LLM API key for subscription #${index}:`,
+          });
+          if (!apiKey?.trim()) {
+            throw new Error("Morph LLM API key is required.");
+          }
+          return {
+            access: apiKey.trim(),
+            refresh: "",
+            expires: Date.now() + 365 * 24 * 60 * 60 * 1000,
+          };
+        },
+        async refreshToken(credentials: OAuthCredentials): Promise<OAuthCredentials> {
+          return credentials;
+        },
+        getApiKey(credentials: OAuthCredentials): string {
+          return credentials.access;
+        },
+      };
+    },
+  },
 };
 
 const SUPPORTED_PROVIDERS = Object.keys(PROVIDER_TEMPLATES);
@@ -1946,8 +2013,26 @@ function registerSub(pi: ExtensionAPI, entry: SubEntry): void {
 	const oauth = template.buildOAuth(entry.index);
 	const modifyModels = template.buildModifyModels?.(name);
 	const builtinModels = getModels(entry.provider as any) as Model<Api>[];
-	const baseUrl = builtinModels[0]?.baseUrl || "";
-	const models = cloneModels(entry.provider, entry.index);
+	const templateModels = template.models;
+	const baseUrl = builtinModels[0]?.baseUrl || templateModels?.[0]?.baseUrl || "";
+	const models = builtinModels.length > 0
+	  ? cloneModels(entry.provider, entry.index)
+	  : (templateModels
+	      ? templateModels.map((m) => ({
+	          id: m.id,
+	          name: `${m.name} (#${entry.index})`,
+	          api: m.api,
+	          baseUrl: m.baseUrl,
+	          reasoning: m.reasoning,
+	          thinkingLevelMap: m.thinkingLevelMap ? { ...m.thinkingLevelMap } : undefined,
+	          input: m.input as ("text" | "image")[],
+	          cost: { ...m.cost },
+	          contextWindow: m.contextWindow,
+	          maxTokens: m.maxTokens,
+	          headers: m.headers ? { ...m.headers } : undefined,
+	          compat: m.compat,
+	        }))
+	      : []);
 
 	pi.registerProvider(name, {
 		baseUrl,
