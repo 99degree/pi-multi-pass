@@ -1521,6 +1521,45 @@ async function handleSubsLimits(ctx: ExtensionCommandContext): Promise<void> {
 }
 
 // ==========================================================================
+// /subs models: Show available models for a provider
+// ==========================================================================
+async function handleSubsModels(ctx: ExtensionCommandContext): Promise<void> {
+  const parts = ctx.arguments.trim().split(/\s+/).filter(Boolean);
+  const providerName = parts[0];
+
+  if (!providerName) {
+    ctx.ui.notify("Usage: /subs models <provider>\nExample: /subs models nvidia", "error");
+    return;
+  }
+
+  // Get models from getModels (system provider)
+  const systemModels = getModels(providerName as any) as Model<Api>[];
+
+  // Get models from PROVIDER_TEMPLATES if available
+  const template = PROVIDER_TEMPLATES[providerName as keyof typeof PROVIDER_TEMPLATES];
+  const templateModels = template?.models || [];
+
+  // Merge and deduplicate
+  const allModels = [...systemModels, ...templateModels];
+  const uniqueModels = Array.from(new Map(allModels.map((m) => [m.id, m])).values());
+
+  if (uniqueModels.length === 0) {
+    ctx.ui.notify(`No models found for provider "${providerName}". Available providers: ${SUPPORTED_PROVIDERS.join(", ")}`, "warning");
+    return;
+  }
+
+  ctx.ui.notify(`Available models for ${providerName}:`, "info");
+  for (const model of uniqueModels) {
+    const costInfo = model.cost?.input !== undefined && model.cost?.output !== undefined
+      ? ` ($${model.cost.input}/M input, $${model.cost.output}/M output)`
+      : "";
+    const reasoningInfo = model.reasoning ? " [reasoning]" : "";
+    const contextInfo = ` (context: ${model.contextWindow || "?"})`;
+    ctx.ui.notify(`- ${model.id}: ${model.name || model.id}${reasoningInfo}${contextInfo}${costInfo}`, "info");
+  }
+}
+
+// ==========================================================================
 // Config persistence (~/.pi/agent/multi-pass.json)
 // ==========================================================================
 
@@ -5663,7 +5702,7 @@ export default function multiSub(pi: ExtensionAPI) {
 	pi.registerCommand("subs", {
 		description: "Manage extra OAuth subscriptions",
 		getArgumentCompletions: (prefix: string) => {
-			const subcommands = ["list", "add", "remove", "login", "logout", "switch", "status", "limits"];
+			const subcommands = ["list", "add", "remove", "login", "logout", "switch", "status", "limits", "models"];
 			const filtered = subcommands.filter((s) => s.startsWith(prefix));
 			return filtered.length > 0
 				? filtered.map((s) => ({ value: s, label: s }))
@@ -5698,6 +5737,8 @@ export default function multiSub(pi: ExtensionAPI) {
 				case "quota":
 				case "usage":
 					return handleSubsLimits(ctx);
+      case "models":
+        return handleSubsModels(ctx);
 				default:
 					return handleSubsMenu(pi, ctx, poolManager);
 			}
