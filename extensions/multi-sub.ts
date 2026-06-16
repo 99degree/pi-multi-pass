@@ -2239,7 +2239,7 @@ function cloneModels(
 // Register a single subscription as a provider
 // ==========================================================================
 
-function registerSub(pi: ExtensionAPI, ctx: ExtensionContext, entry: SubEntry): void {
+function registerSub(pi: ExtensionAPI, entry: SubEntry, ctx?: ExtensionContext): void {
 	const template = PROVIDER_TEMPLATES[entry.provider];
 	if (!template) return;
 
@@ -3453,7 +3453,7 @@ async function handleSubsAdd(pi: ExtensionAPI, ctx: ExtensionCommandContext): Pr
 	config.subscriptions.push(entry);
 	saveGlobalConfig(config);
 
-	registerSub(pi, ctx, entry);
+	registerSub(pi, entry, ctx);
 	ctx.modelRegistry.refresh();
 
 	const loginNow = await ctx.ui.confirm(
@@ -5755,9 +5755,10 @@ export default function multiSub(pi: ExtensionAPI) {
 	const envEntries = parseEnvConfig();
 	const all = normalizeEntries(mergeConfigs(config, envEntries));
 
-	// Register all subscriptions (always global)
+	// Register all subscriptions (always global). A session_start pass below re-registers
+	// them with ctx.modelRegistry so models.json/custom provider models are included too.
 	for (const entry of all) {
-		registerSub(pi, ctx, entry);
+		registerSub(pi, entry);
 	}
 
 	// Initialize pool manager with global pools (updated on session_start with project config)
@@ -5809,6 +5810,9 @@ export default function multiSub(pi: ExtensionAPI) {
 	// On session start, reload pools with project-level config
 	pi.on("session_start", async (_event, ctx) => {
 		const effective = loadEffectiveConfig(ctx.cwd);
+		for (const entry of effective.subscriptions) {
+			registerSub(pi, entry, ctx);
+		}
 		poolManager.loadPools(effective.pools);
 
 		const statusParts: string[] = [];
