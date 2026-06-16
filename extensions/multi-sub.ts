@@ -1656,37 +1656,80 @@ async function handleSubsLimits(ctx: ExtensionCommandContext): Promise<void> {
 // ==========================================================================
 // /subs models: Show available models for a provider (with dropdown)
 // ==========================================================================
-async function handleSubsModels(ctx: ExtensionCommandContext): Promise<void> {
-	const providerOptions = SUPPORTED_PROVIDERS.map((p) => {
-		const template = PROVIDER_TEMPLATES[p as keyof typeof PROVIDER_TEMPLATES];
-		const displayName = ctx.modelRegistry.getProviderDisplayName(p);
-		return `${p} -- ${displayName || template?.displayName || p}`;
-	});
+function formatModelDescription(model: Model<Api>): string {
+	const costInfo = model.cost?.input !== undefined && model.cost?.output !== undefined
+		? ` | cost: $${model.cost.input}/M in, $${model.cost.output}/M out`
+		: "";
+	const reasoningInfo = model.reasoning ? " | reasoning" : "";
+	const contextInfo = ` | context: ${model.contextWindow || "?"}`;
+	return `${model.name || model.id}${reasoningInfo}${contextInfo}${costInfo}`;
+}
+
+function collectModelsForProvider(
+	ctx: ExtensionCommandContext,
+	providerName: string,
+): Model<Api>[] {
+	const registryModels = ctx.modelRegistry.getAll().filter((m) => m.provider === providerName) as Model<Api>[];
+	const systemModels = getModels(providerName as any) as Model<Api>[];
+	const template = PROVIDER_TEMPLATES[providerName as keyof typeof PROVIDER_TEMPLATES];
+	const templateModels = template?.models || [];
+	return Array.from(
+		new Map([...registryModels, ...systemModels, ...templateModels].map((m) => [m.id, m])).values(),
+	) as Model<Api>[];
+}
+
+async function handleSubsModels(pi: ExtensionAPI, ctx: ExtensionCommandContext): Promise<void> {
+	const config = loadGlobalConfig();
+	const envEntries = parseEnvConfig();
+	const allSubs = normalizeEntries(mergeConfigs(config, envEntries));
+	const providerOptions = [
+		...SUPPORTED_PROVIDERS.map((p) => {
+			const template = PROVIDER_TEMPLATES[p as keyof typeof PROVIDER_TEMPLATES];
+			const displayName = ctx.modelRegistry.getProviderDisplayName(p);
+			return `${p} -- ${displayName || template?.displayName || p} (system)`;
+		}),
+		...allSubs.map((entry) => `${subProviderName(entry)} -- ${subDisplayName(entry)}`),
+	];
 	const selected = await ctx.ui.select("Select provider to view models", providerOptions);
 	if (!selected) {
 		ctx.ui.notify("No provider selected.", "info");
 		return;
 	}
 	const providerName = selected.split(" -- ")[0].trim();
-	const registryModels = ctx.modelRegistry.getAll().filter((m) => m.provider === providerName) as Model<Api>[];
-	const systemModels = getModels(providerName as any) as Model<Api>[];
-	const template = PROVIDER_TEMPLATES[providerName as keyof typeof PROVIDER_TEMPLATES];
-	const templateModels = template?.models || [];
-	const allModels = [...registryModels, ...systemModels, ...templateModels];
-	const uniqueModels = Array.from(new Map(allModels.map((m) => [m.id, m])).values());
+	const uniqueModels = collectModelsForProvider(ctx, providerName);
 	if (uniqueModels.length === 0) {
 		ctx.ui.notify(`No models found for provider "${providerName}".`, "warning");
 		return;
 	}
-	const lines = uniqueModels.map((model) => {
-		const costInfo = model.cost?.input !== undefined && model.cost?.output !== undefined
-			? ` ($${model.cost.input}/M input, $${model.cost.output}/M output)`
-			: "";
-		const reasoningInfo = model.reasoning ? " [reasoning]" : "";
-		const contextInfo = ` (context: ${model.contextWindow || "?"})`;
-		return `- ${model.id}: ${model.name || model.id}${reasoningInfo}${contextInfo}${costInfo}`;
+
+	const modelItems = uniqueModels.map((model) => ({
+		value: model.id,
+		label: model.id,
+		description: formatModelDescription(model),
+	}));
+	const selectedModelId = await showWrappedSelect(ctx, {
+		title: `Models for ${providerName}`,
+		subtitle: "Select a model to make it the current default model.",
+		items: modelItems,
+		confirmHint: "select",
+		cancelHint: "back",
 	});
-	ctx.ui.notify(`Available models for ${providerName}:\n${lines.join("\n")}`, "info");
+	if (!selectedModelId) return;
+
+	const model = ctx.modelRegistry.find(providerName, selectedModelId)
+		|| uniqueModels.find((m) => m.id === selectedModelId);
+	if (!model) {
+		ctx.ui.notify(`Model "${selectedModelId}" is not available for provider "${providerName}".`, "warning");
+		return;
+	}
+
+	const success = await pi.setModel(model);
+	if (!success) {
+		ctx.ui.notify(`Could not switch to ${providerName}/${selectedModelId}.`, "warning");
+		return;
+	}
+	ctx.ui.notify(`Default model set to ${providerName}/${selectedModelId}.`, "info");
+	ctx.ui.setStatus("multi-pass", `default:${providerName}/${selectedModelId}`);
 }
 
 
@@ -5396,7 +5439,7 @@ async function handleSubsMenu(
 				await handleSubsLimits(ctx);
 				break;
 			case "models":
-				await handleSubsModels(ctx);
+				await handleSubsModels(pi, ctx);
 				break;
 		}
 	}
@@ -5877,8 +5920,8 @@ export default function multiSub(pi: ExtensionAPI) {
 				case "quota":
 				case "usage":
 					return handleSubsLimits(ctx);
-      case "models":
-        return handleSubsModels(ctx);
+				case "models":
+					return handleSubsModels(pi, ctx);
 				default:
 					return handleSubsMenu(pi, ctx, poolManager);
 			}
