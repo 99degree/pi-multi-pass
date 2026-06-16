@@ -2202,8 +2202,24 @@ function getBaseProvider(providerName: string): string | undefined {
 // Model cloning
 // ==========================================================================
 
-function cloneModels(originalProvider: string, index: number) {
-	const models = getModels(originalProvider as any) as Model<Api>[];
+function getRegistryModelsForProvider(
+	ctx: ExtensionContext | ExtensionCommandContext | undefined,
+	providerName: string,
+): Model<Api>[] {
+	if (!ctx) return [];
+	return ctx.modelRegistry.getAll().filter((m) => m.provider === providerName) as Model<Api>[];
+}
+
+function cloneModels(
+	originalProvider: string,
+	index: number,
+	ctx?: ExtensionContext | ExtensionCommandContext,
+) {
+	const registryModels = getRegistryModelsForProvider(ctx, originalProvider);
+	const systemModels = getModels(originalProvider as any) as Model<Api>[];
+	const models = Array.from(
+		new Map([...registryModels, ...systemModels].map((m) => [m.id, m])).values(),
+	) as Model<Api>[];
 	return models.map((m) => ({
 		id: m.id,
 		name: `${m.name} (#${index})`,
@@ -2223,18 +2239,22 @@ function cloneModels(originalProvider: string, index: number) {
 // Register a single subscription as a provider
 // ==========================================================================
 
-function registerSub(pi: ExtensionAPI, entry: SubEntry): void {
+function registerSub(pi: ExtensionAPI, ctx: ExtensionContext, entry: SubEntry): void {
 	const template = PROVIDER_TEMPLATES[entry.provider];
 	if (!template) return;
 
 	const name = subProviderName(entry);
 	const oauth = template.buildOAuth(entry.index);
 	const modifyModels = template.buildModifyModels?.(name);
+	const registryModels = getRegistryModelsForProvider(ctx, entry.provider);
 	const builtinModels = getModels(entry.provider as any) as Model<Api>[];
 	const templateModels = template.models;
-	const baseUrl = builtinModels[0]?.baseUrl || templateModels?.[0]?.baseUrl || "";
-	const models = builtinModels.length > 0
-	  ? [...cloneModels(entry.provider, entry.index), ...(templateModels || [])]
+	const allBaseModels = Array.from(
+		new Map([...registryModels, ...builtinModels].map((m) => [m.id, m])).values(),
+	) as Model<Api>[];
+	const baseUrl = allBaseModels[0]?.baseUrl || templateModels?.[0]?.baseUrl || "";
+	const models = allBaseModels.length > 0
+	  ? [...cloneModels(entry.provider, entry.index, ctx), ...(templateModels || [])]
 	  : (templateModels || []);
 
 	pi.registerProvider(name, {
@@ -3433,7 +3453,7 @@ async function handleSubsAdd(pi: ExtensionAPI, ctx: ExtensionCommandContext): Pr
 	config.subscriptions.push(entry);
 	saveGlobalConfig(config);
 
-	registerSub(pi, entry);
+	registerSub(pi, ctx, entry);
 	ctx.modelRegistry.refresh();
 
 	const loginNow = await ctx.ui.confirm(
@@ -5737,7 +5757,7 @@ export default function multiSub(pi: ExtensionAPI) {
 
 	// Register all subscriptions (always global)
 	for (const entry of all) {
-		registerSub(pi, entry);
+		registerSub(pi, ctx, entry);
 	}
 
 	// Initialize pool manager with global pools (updated on session_start with project config)
