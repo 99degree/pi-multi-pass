@@ -1520,9 +1520,40 @@ async function handleSubsLimits(ctx: ExtensionCommandContext): Promise<void> {
 		await showQuotaDetails(ctx, selected);
 	}
 }
+
 // ==========================================================================
 // /subs models: Show available models for a provider (with dropdown)
 // ==========================================================================
+async function handleSubsModels(ctx: ExtensionCommandContext): Promise<void> {
+	const providerOptions = SUPPORTED_PROVIDERS.map((p) => ({
+		label: p,
+		value: p,
+	}));
+	const selected = await ctx.ui.select("Select provider to view models", providerOptions);
+	if (!selected) {
+		ctx.ui.notify("No provider selected.", "info");
+		return;
+	}
+	const providerName = selected.value;
+	const systemModels = getModels(providerName as any) as Model<Api>[];
+	const template = PROVIDER_TEMPLATES[providerName as keyof typeof PROVIDER_TEMPLATES];
+	const templateModels = template?.models || [];
+	const allModels = [...systemModels, ...templateModels];
+	const uniqueModels = Array.from(new Map(allModels.map((m) => [m.id, m])).values());
+	if (uniqueModels.length === 0) {
+		ctx.ui.notify(`No models found for provider "${providerName}".`, "warning");
+		return;
+	}
+	ctx.ui.notify(`Available models for ${providerName}:`, "info");
+	for (const model of uniqueModels) {
+		const costInfo = model.cost?.input !== undefined && model.cost?.output !== undefined
+			? ` ($${model.cost.input}/M input, $${model.cost.output}/M output)`
+			: "";
+		const reasoningInfo = model.reasoning ? " [reasoning]" : "";
+		const contextInfo = ` (context: ${model.contextWindow || "?"})`;
+		ctx.ui.notify(`- ${model.id}: ${model.name || model.id}${reasoningInfo}${contextInfo}${costInfo}`, "info");
+	}
+}
 async function handleSubsModels(ctx: ExtensionCommandContext): Promise<void> {
 	const providerOptions = SUPPORTED_PROVIDERS.map((p) => ({
 		label: p,
@@ -5219,6 +5250,7 @@ async function handleSubsMenu(
 		{ value: "switch", label: "switch", description: "Switch to a different subscription/provider now" },
 		{ value: "status", label: "status", description: "Show auth status and token info" },
 		{ value: "limits", label: "limits", description: "Check built-in quota support (Codex + Google)" },
+	{ value: "models", label: "models", description: "Show available models for a provider" },
 	];
 	let preferredAction = "list";
 
