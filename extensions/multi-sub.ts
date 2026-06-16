@@ -1659,7 +1659,8 @@ async function handleSubsLimits(ctx: ExtensionCommandContext): Promise<void> {
 async function handleSubsModels(ctx: ExtensionCommandContext): Promise<void> {
 	const providerOptions = SUPPORTED_PROVIDERS.map((p) => {
 		const template = PROVIDER_TEMPLATES[p as keyof typeof PROVIDER_TEMPLATES];
-		return `${p} -- ${template?.displayName || p}`;
+		const displayName = ctx.modelRegistry.getProviderDisplayName(p);
+		return `${p} -- ${displayName || template?.displayName || p}`;
 	});
 	const selected = await ctx.ui.select("Select provider to view models", providerOptions);
 	if (!selected) {
@@ -1667,24 +1668,25 @@ async function handleSubsModels(ctx: ExtensionCommandContext): Promise<void> {
 		return;
 	}
 	const providerName = selected.split(" -- ")[0].trim();
+	const registryModels = ctx.modelRegistry.getAll().filter((m) => m.provider === providerName) as Model<Api>[];
 	const systemModels = getModels(providerName as any) as Model<Api>[];
 	const template = PROVIDER_TEMPLATES[providerName as keyof typeof PROVIDER_TEMPLATES];
 	const templateModels = template?.models || [];
-	const allModels = [...systemModels, ...templateModels];
+	const allModels = [...registryModels, ...systemModels, ...templateModels];
 	const uniqueModels = Array.from(new Map(allModels.map((m) => [m.id, m])).values());
 	if (uniqueModels.length === 0) {
 		ctx.ui.notify(`No models found for provider "${providerName}".`, "warning");
 		return;
 	}
-	ctx.ui.notify(`Available models for ${providerName}:`, "info");
-	for (const model of uniqueModels) {
+	const lines = uniqueModels.map((model) => {
 		const costInfo = model.cost?.input !== undefined && model.cost?.output !== undefined
 			? ` ($${model.cost.input}/M input, $${model.cost.output}/M output)`
 			: "";
 		const reasoningInfo = model.reasoning ? " [reasoning]" : "";
 		const contextInfo = ` (context: ${model.contextWindow || "?"})`;
-		ctx.ui.notify(`- ${model.id}: ${model.name || model.id}${reasoningInfo}${contextInfo}${costInfo}`, "info");
-	}
+		return `- ${model.id}: ${model.name || model.id}${reasoningInfo}${contextInfo}${costInfo}`;
+	});
+	ctx.ui.notify(`Available models for ${providerName}:\n${lines.join("\n")}`, "info");
 }
 
 
