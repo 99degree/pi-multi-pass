@@ -6,7 +6,7 @@
  *
  * Features:
  * * - /subs: manage subscriptions (add, remove, login, logout, status, models)
- * - /subs models <provider>: show all available models for a provider
+ * - /subs models (select provider from dropdown): show all available models for a provider
  *   - /pool: define provider pools with auto-rotation on rate limit errors
  *   - Project-level pool config: .pi/multi-pass.json overrides global pools
  *   - MULTI_SUB env var for scripting
@@ -33,6 +33,7 @@
  *   - google-antigravity (Antigravity)
  * - nvidia (NVIDIA AI Foundry / NIM)
  * - morph-llm (Morph LLM)
+ * - siliconflow (SiliconFlow)
  */
 
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from "fs";
@@ -289,24 +290,57 @@ const PROVIDER_TEMPLATES: Record<string, ProviderTemplate> = {
     models: [
       {
         id: "morph-qwen35-397b",
-        name: "Morph Qwen35-397B",
+        name: "Morph Qwen 3.5 397B",
         api: "openai",
         baseUrl: "https://api.morphllm.com/v1",
         reasoning: false,
-        input: ["text"],
+        input: ["text", "image"],
         cost: { input: 0, output: 0 },
-        contextWindow: 32768,
+        contextWindow: 262144,
         maxTokens: 4096,
       },
       {
         id: "morph-qwen36-27b",
-        name: "Morph Qwen36-27B",
+        name: "Morph Qwen 3.6 27B",
         api: "openai",
         baseUrl: "https://api.morphllm.com/v1",
         reasoning: false,
         input: ["text"],
         cost: { input: 0, output: 0 },
-        contextWindow: 32768,
+        contextWindow: 131072,
+        maxTokens: 4096,
+      },
+      {
+        id: "morph-minimax27-230b",
+        name: "Morph MiniMax M2.7",
+        api: "openai",
+        baseUrl: "https://api.morphllm.com/v1",
+        reasoning: false,
+        input: ["text"],
+        cost: { input: 0, output: 0 },
+        contextWindow: 200000,
+        maxTokens: 4096,
+      },
+      {
+        id: "morph-dsv4flash",
+        name: "Morph DeepSeek V4 Flash Beta",
+        api: "openai",
+        baseUrl: "https://api.morphllm.com/v1",
+        reasoning: false,
+        input: ["text"],
+        cost: { input: 0, output: 0 },
+        contextWindow: 131072,
+        maxTokens: 4096,
+      },
+      {
+        id: "morph-v3-fast",
+        name: "Morph V3 Fast",
+        api: "openai",
+        baseUrl: "https://api.morphllm.com/v1",
+        reasoning: false,
+        input: ["text"],
+        cost: { input: 0, output: 0 },
+        contextWindow: 131072,
         maxTokens: 4096,
       },
     ],
@@ -332,6 +366,104 @@ const PROVIDER_TEMPLATES: Record<string, ProviderTemplate> = {
           });
           if (!apiKey?.trim()) {
             throw new Error("Morph LLM API key is required.");
+          }
+          return {
+            access: apiKey.trim(),
+            refresh: "",
+            expires: Date.now() + 365 * 24 * 60 * 60 * 1000,
+          };
+        },
+        async refreshToken(credentials: OAuthCredentials): Promise<OAuthCredentials> {
+          return credentials;
+        },
+        getApiKey(credentials: OAuthCredentials): string {
+          return credentials.access;
+        },
+      };
+    },
+  },
+  "siliconflow": {
+    displayName: "SiliconFlow",
+    useOAuth: false,
+    models: [
+      {
+        id: "deepseek-ai/DeepSeek-R1",
+        name: "DeepSeek R1",
+        api: "openai",
+        baseUrl: "https://api.siliconflow.com/v1",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0 },
+        contextWindow: 131072,
+        maxTokens: 8192,
+      },
+      {
+        id: "deepseek-ai/DeepSeek-V3",
+        name: "DeepSeek V3",
+        api: "openai",
+        baseUrl: "https://api.siliconflow.com/v1",
+        reasoning: false,
+        input: ["text"],
+        cost: { input: 0, output: 0 },
+        contextWindow: 131072,
+        maxTokens: 8192,
+      },
+      {
+        id: "Qwen/Qwen2.5-72B-Instruct",
+        name: "Qwen 2.5 72B Instruct",
+        api: "openai",
+        baseUrl: "https://api.siliconflow.com/v1",
+        reasoning: false,
+        input: ["text"],
+        cost: { input: 0, output: 0 },
+        contextWindow: 131072,
+        maxTokens: 8192,
+      },
+      {
+        id: "Qwen/QwQ-32B",
+        name: "QwQ 32B",
+        api: "openai",
+        baseUrl: "https://api.siliconflow.com/v1",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0 },
+        contextWindow: 131072,
+        maxTokens: 8192,
+      },
+      {
+        id: "nex-agi/Nex-N2-Pro",
+        name: "Nex N2 Pro",
+        api: "openai",
+        baseUrl: "https://api.siliconflow.com/v1",
+        reasoning: false,
+        input: ["text"],
+        cost: { input: 0, output: 0 },
+        contextWindow: 131072,
+        maxTokens: 8192,
+      },
+    ],
+    builtinOAuth: {
+      id: "siliconflow",
+      name: "SiliconFlow",
+      async login(): Promise<OAuthCredentials> {
+        throw new Error("SiliconFlow uses API key, not OAuth.");
+      },
+      async refreshToken(credentials: OAuthCredentials): Promise<OAuthCredentials> {
+        return credentials;
+      },
+      getApiKey(credentials: OAuthCredentials): string {
+        return credentials.access;
+      },
+    },
+    buildOAuth(index: number) {
+      return {
+        name: `SiliconFlow #${index}`,
+        async login(callbacks: OAuthLoginCallbacks): Promise<OAuthCredentials> {
+          const apiKey = await callbacks.onPrompt({
+            message: `Enter SiliconFlow API key for subscription #${index}:`,
+          });
+          if (!apiKey?.trim()) {
+            throw new Error("SiliconFlow API key is required.");
           }
           return {
             access: apiKey.trim(),
