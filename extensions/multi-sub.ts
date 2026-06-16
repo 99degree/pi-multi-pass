@@ -246,7 +246,7 @@ const PROVIDER_TEMPLATES: Record<string, ProviderTemplate> = {
 	"nvidia": {
 		displayName: "NVIDIA (NVIDIA AI Foundry / NIM)",
 		useOAuth: false,
- models: [{ id: "nvidia-default", name: "NVIDIA Default", api: "openai", baseUrl: "https://api.nvidia.com/v1", reasoning: false, input: ["text"], cost: { input: 0, output: 0 }, contextWindow: 32768, maxTokens: 4096, }],		builtinOAuth: {
+ models: [{ id: "nvidia-default", name: "NVIDIA Default", api: "openai-completions", baseUrl: "https://api.nvidia.com/v1", reasoning: false, input: ["text"], cost: { input: 0, output: 0 }, contextWindow: 32768, maxTokens: 4096, }],		builtinOAuth: {
 			id: "nvidia",
 			name: "NVIDIA",
 			async login(): Promise<OAuthCredentials> {
@@ -291,7 +291,7 @@ const PROVIDER_TEMPLATES: Record<string, ProviderTemplate> = {
       {
         id: "morph-qwen35-397b",
         name: "Morph Qwen 3.5 397B",
-        api: "openai",
+        api: "openai-completions",
         baseUrl: "https://api.morphllm.com/v1",
         reasoning: false,
         input: ["text", "image"],
@@ -302,7 +302,7 @@ const PROVIDER_TEMPLATES: Record<string, ProviderTemplate> = {
       {
         id: "morph-qwen36-27b",
         name: "Morph Qwen 3.6 27B",
-        api: "openai",
+        api: "openai-completions",
         baseUrl: "https://api.morphllm.com/v1",
         reasoning: false,
         input: ["text"],
@@ -313,7 +313,7 @@ const PROVIDER_TEMPLATES: Record<string, ProviderTemplate> = {
       {
         id: "morph-minimax27-230b",
         name: "Morph MiniMax M2.7",
-        api: "openai",
+        api: "openai-completions",
         baseUrl: "https://api.morphllm.com/v1",
         reasoning: false,
         input: ["text"],
@@ -324,7 +324,7 @@ const PROVIDER_TEMPLATES: Record<string, ProviderTemplate> = {
       {
         id: "morph-dsv4flash",
         name: "Morph DeepSeek V4 Flash Beta",
-        api: "openai",
+        api: "openai-completions",
         baseUrl: "https://api.morphllm.com/v1",
         reasoning: false,
         input: ["text"],
@@ -335,7 +335,7 @@ const PROVIDER_TEMPLATES: Record<string, ProviderTemplate> = {
       {
         id: "morph-v3-fast",
         name: "Morph V3 Fast",
-        api: "openai",
+        api: "openai-completions",
         baseUrl: "https://api.morphllm.com/v1",
         reasoning: false,
         input: ["text"],
@@ -389,7 +389,7 @@ const PROVIDER_TEMPLATES: Record<string, ProviderTemplate> = {
       {
         id: "deepseek-ai/DeepSeek-R1",
         name: "DeepSeek R1",
-        api: "openai",
+        api: "openai-completions",
         baseUrl: "https://api.siliconflow.com/v1",
         reasoning: true,
         input: ["text"],
@@ -400,7 +400,7 @@ const PROVIDER_TEMPLATES: Record<string, ProviderTemplate> = {
       {
         id: "deepseek-ai/DeepSeek-V3",
         name: "DeepSeek V3",
-        api: "openai",
+        api: "openai-completions",
         baseUrl: "https://api.siliconflow.com/v1",
         reasoning: false,
         input: ["text"],
@@ -411,7 +411,7 @@ const PROVIDER_TEMPLATES: Record<string, ProviderTemplate> = {
       {
         id: "Qwen/Qwen2.5-72B-Instruct",
         name: "Qwen 2.5 72B Instruct",
-        api: "openai",
+        api: "openai-completions",
         baseUrl: "https://api.siliconflow.com/v1",
         reasoning: false,
         input: ["text"],
@@ -422,7 +422,7 @@ const PROVIDER_TEMPLATES: Record<string, ProviderTemplate> = {
       {
         id: "Qwen/QwQ-32B",
         name: "QwQ 32B",
-        api: "openai",
+        api: "openai-completions",
         baseUrl: "https://api.siliconflow.com/v1",
         reasoning: true,
         input: ["text"],
@@ -433,7 +433,7 @@ const PROVIDER_TEMPLATES: Record<string, ProviderTemplate> = {
       {
         id: "nex-agi/Nex-N2-Pro",
         name: "Nex N2 Pro",
-        api: "openai",
+        api: "openai-completions",
         baseUrl: "https://api.siliconflow.com/v1",
         reasoning: false,
         input: ["text"],
@@ -1657,16 +1657,16 @@ async function handleSubsLimits(ctx: ExtensionCommandContext): Promise<void> {
 // /subs models: Show available models for a provider (with dropdown)
 // ==========================================================================
 async function handleSubsModels(ctx: ExtensionCommandContext): Promise<void> {
-	const providerOptions = SUPPORTED_PROVIDERS.map((p) => ({
-		label: p,
-		value: p,
-	}));
+	const providerOptions = SUPPORTED_PROVIDERS.map((p) => {
+		const template = PROVIDER_TEMPLATES[p as keyof typeof PROVIDER_TEMPLATES];
+		return `${p} -- ${template?.displayName || p}`;
+	});
 	const selected = await ctx.ui.select("Select provider to view models", providerOptions);
 	if (!selected) {
 		ctx.ui.notify("No provider selected.", "info");
 		return;
 	}
-	const providerName = selected.value;
+	const providerName = selected.split(" -- ")[0].trim();
 	const systemModels = getModels(providerName as any) as Model<Api>[];
 	const template = PROVIDER_TEMPLATES[providerName as keyof typeof PROVIDER_TEMPLATES];
 	const templateModels = template?.models || [];
@@ -5392,6 +5392,9 @@ async function handleSubsMenu(
 				break;
 			case "limits":
 				await handleSubsLimits(ctx);
+				break;
+			case "models":
+				await handleSubsModels(ctx);
 				break;
 		}
 	}
