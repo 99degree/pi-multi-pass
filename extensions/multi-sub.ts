@@ -5,7 +5,8 @@
  * Each extra account gets its own provider name, /login entry, and cloned models.
  *
  * Features:
- *   - /subs: manage subscriptions (add, remove, login, logout, status)
+ * * - /subs: manage subscriptions (add, remove, login, logout, status, models)
+ * - /subs models <provider>: show all available models for a provider
  *   - /pool: define provider pools with auto-rotation on rate limit errors
  *   - Project-level pool config: .pi/multi-pass.json overrides global pools
  *   - MULTI_SUB env var for scripting
