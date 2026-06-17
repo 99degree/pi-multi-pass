@@ -34,6 +34,7 @@
  *   - nvidia                (NVIDIA AI Foundry / NIM)
  *   - morph-llm             (Morph LLM)
  *   - siliconflow           (SiliconFlow)
+ *   - opencode              (OpenCode Zen)
  *   - openrouter            (OpenRouter)
  *   - cloudflare-ai-gateway (Cloudflare AI Gateway)
  *   - huggingface           (Hugging Face Inference Router)
@@ -671,6 +672,30 @@ const PROVIDER_TEMPLATES: Record<string, ProviderTemplate> = {
           return credentials.access;
         },
       };
+    },
+  },
+
+  opencode: {
+    displayName: "OpenCode Zen",
+    useOAuth: false,
+    models: [
+      providerModel("opencode", "gpt-5", "GPT-5", "openai-responses", "https://opencode.ai/zen/v1", true, ["text", "image"], 400000, 128000),
+      providerModel("opencode", "gpt-5-codex", "GPT-5 Codex", "openai-responses", "https://opencode.ai/zen/v1", true, ["text", "image"], 400000, 128000),
+      providerModel("opencode", "gpt-5.1-codex", "GPT-5.1 Codex", "openai-responses", "https://opencode.ai/zen/v1", true, ["text", "image"], 400000, 128000),
+      providerModel("opencode", "claude-opus-4-5", "Claude Opus 4.5", "anthropic-messages", "https://opencode.ai/zen", true, ["text", "image"], 200000, 64000),
+      providerModel("opencode", "claude-sonnet-4-6", "Claude Sonnet 4.6", "anthropic-messages", "https://opencode.ai/zen", true, ["text", "image"], 1000000, 64000),
+      providerModel("opencode", "deepseek-v4-pro", "DeepSeek V4 Pro", "openai-completions", "https://opencode.ai/zen/v1", true, ["text"], 1000000, 384000),
+      providerModel("opencode", "gemini-3.1-pro", "Gemini 3.1 Pro Preview", "google-generative-ai", "https://opencode.ai/zen/v1", true, ["text", "image"], 1048576, 65536),
+      providerModel("opencode", "glm-5.1", "GLM-5.1", "openai-completions", "https://opencode.ai/zen/v1", true, ["text"], 204800, 131072),
+    ],
+    builtinOAuth: apiKeyOAuthProvider("opencode", "OpenCode Zen"),
+    buildOAuth(index: number) {
+      return buildApiKeyOAuthProvider(
+        index,
+        "OpenCode Zen",
+        "Enter OpenCode Zen API key",
+        "OpenCode Zen API key is required.",
+      );
     },
   },
 
