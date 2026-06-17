@@ -3511,6 +3511,11 @@ async function showSubscriptionActions(
 		hasAuth
 			? { value: "logout", label: "logout", description: "Log out this subscription" }
 			: { value: "login", label: "login", description: "Show login instructions" },
+		{
+			value: "pool",
+			label: "pool",
+			description: "Create a rotation pool for this provider",
+		},
 		{ value: "remove", label: "remove", description: "Remove this subscription" },
 	];
 
@@ -3531,6 +3536,13 @@ async function showSubscriptionActions(
 			`Use /login and select "${PROVIDER_TEMPLATES[entry.provider]?.buildOAuth(entry.index).name}" to authenticate.`,
 			"info",
 		);
+		return;
+	}
+	if (action === "pool") {
+		await createAndPersistPool(ctx, poolManager, {
+			allowOverwrite: true,
+			baseProvider: entry.provider,
+		});
 		return;
 	}
 	if (action === "logout") {
@@ -4119,19 +4131,39 @@ async function promptForPoolDefinition(
 	options?: {
 		allowOverwrite?: boolean;
 		resumeChainName?: string;
+		baseProvider?: string;
 	},
 ): Promise<PoolConfig | undefined> {
 	const config = loadGlobalConfig();
 	const envEntries = parseEnvConfig();
 	const allSubs = normalizeEntries(mergeConfigs(config, envEntries));
-	const providerLabels = SUPPORTED_PROVIDERS.map((p) => {
-		const t = PROVIDER_TEMPLATES[p];
-		return `${p} -- ${t.displayName}`;
-	});
 
-	const selectedProvider = await ctx.ui.select("Pool base provider", providerLabels);
-	if (!selectedProvider) return undefined;
-	const baseProvider = selectedProvider.split(" -- ")[0];
+	const requestedBaseProvider = options?.baseProvider?.trim();
+	if (requestedBaseProvider && !SUPPORTED_PROVIDERS.includes(requestedBaseProvider)) {
+		ctx.ui.notify(`Unsupported provider for pool creation: ${requestedBaseProvider}.`, "error");
+		return undefined;
+	}
+
+	let baseProvider = requestedBaseProvider;
+	if (!baseProvider) {
+		const providerItems: SelectItem[] = SUPPORTED_PROVIDERS.map((p) => {
+			const t = PROVIDER_TEMPLATES[p];
+			return {
+				value: p,
+				label: p,
+				description: t?.displayName,
+			};
+		});
+		const selectedProvider = await showWrappedSelect(ctx, {
+			title: "Pool base provider",
+			subtitle: "Choose the provider family that will share one model across subscriptions.",
+			items: providerItems,
+			confirmHint: "select",
+			cancelHint: "back",
+		});
+		if (!selectedProvider) return undefined;
+		baseProvider = selectedProvider;
+	}
 
 	const poolName = await ctx.ui.input("Pool name", `e.g. ${baseProvider}-pool`);
 	if (!poolName?.trim()) return undefined;
@@ -5579,6 +5611,7 @@ async function handleSubsMenu(
 ): Promise<void> {
 	const actions: SelectItem[] = [
 		{ value: "list", label: "list", description: "Show all extra subscriptions" },
+		{ value: "pool", label: "pool", description: "Create/manage provider pools for failover" },
 		{ value: "add", label: "add", description: "Add a new subscription" },
 		{ value: "remove", label: "remove", description: "Remove a subscription" },
 		{ value: "login", label: "login", description: "Login to a subscription" },
@@ -5586,7 +5619,7 @@ async function handleSubsMenu(
 		{ value: "switch", label: "switch", description: "Switch to a different subscription/provider now" },
 		{ value: "status", label: "status", description: "Show auth status and token info" },
 		{ value: "limits", label: "limits", description: "Check built-in quota support (Codex + Google)" },
-	{ value: "models", label: "models", description: "Show available models for a provider" },
+		{ value: "models", label: "models", description: "Show available models for a provider" },
 	];
 	let preferredAction = "list";
 
@@ -5603,6 +5636,9 @@ async function handleSubsMenu(
 		preferredAction = action;
 		const config = loadGlobalConfig();
 		switch (action) {
+			case "pool":
+				await handlePoolMenu(ctx, poolManager);
+				break;
 			case "list":
 				await handleSubsList(pi, ctx, config, poolManager);
 				break;
@@ -6078,7 +6114,7 @@ export default function multiSub(pi: ExtensionAPI) {
 	pi.registerCommand("subs", {
 		description: "Manage extra OAuth subscriptions",
 		getArgumentCompletions: (prefix: string) => {
-			const subcommands = ["list", "add", "remove", "login", "logout", "switch", "status", "limits", "models"];
+			const subcommands = ["list", "pool", "add", "remove", "login", "logout", "switch", "status", "limits", "models"];
 			const filtered = subcommands.filter((s) => s.startsWith(prefix));
 			return filtered.length > 0
 				? filtered.map((s) => ({ value: s, label: s }))
@@ -6090,6 +6126,8 @@ export default function multiSub(pi: ExtensionAPI) {
 			const subcommand = (parts[0] || "").toLowerCase();
 			const rest = parts.slice(1).join(" ");
 			switch (subcommand) {
+				case "pool":
+					return handlePoolMenu(ctx, poolManager);
 				case "list":
 				case "ls":
 					return handleSubsList(pi, ctx, config, poolManager);
