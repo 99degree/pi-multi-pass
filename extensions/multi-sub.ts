@@ -2088,6 +2088,7 @@ interface SubEntry {
  *    remaining window first), then default members, then overflow.
  *  - "custom": delegate selection to a user-provided JS script. */
 type PoolStrategy = "round-robin" | "quota-first" | "scheduled" | "custom";
+type PoolMode = "same-provider" | "cross-provider";
 
 type DayOfWeek = "mon" | "tue" | "wed" | "thu" | "fri" | "sat" | "sun";
 const ALL_DAYS: readonly DayOfWeek[] = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"] as const;
@@ -2160,11 +2161,16 @@ interface PresetConfig {
 interface PoolConfig {
 	/** Pool name (user-defined) */
 	name: string;
-	/** Base provider type, e.g. "openai-codex" */
+	/** Primary/base provider label. For cross-provider pools this is the first member.
+	 *  For same-provider pools this is the provider family. */
 	baseProvider: string;
-	/** Provider names in rotation order. Includes the original (e.g. "openai-codex")
-	 *  and extras (e.g. "openai-codex-2", "openai-codex-3") */
+	/** Provider names in rotation order. Can include the original system provider
+	 *  (e.g. "openai-codex"), extra subscriptions (e.g. "openai-codex-2"),
+	 *  and different providers for cross-provider failover. */
 	members: string[];
+	/** Optional per-member model mapping. Needed when pool members are different
+	 *  providers and the same model ID is not available everywhere. */
+	memberModels?: Record<string, string>;
 	/** Whether auto-rotation is enabled */
 	enabled: boolean;
 	/** Selection strategy when picking the next member on failover.
@@ -2295,10 +2301,16 @@ function filterPoolsByAllowedProviders(
 	}
 	const allowed = new Set(allowedProviderNames);
 	return pools
-		.map((pool) => ({
-			...pool,
-			members: pool.members.filter((member) => allowed.has(member)),
-		}))
+		.map((pool) => {
+			const members = pool.members.filter((member) => allowed.has(member));
+			return {
+				...pool,
+				members,
+				memberModels: pool.memberModels
+					? Object.fromEntries(Object.entries(pool.memberModels).filter(([member]) => members.includes(member)))
+					: undefined,
+			};
+		})
 		.filter((pool) => pool.members.length > 0);
 }
 
@@ -3060,7 +3072,7 @@ class PoolManager {
 			candidates.push({
 				poolName: pool.name,
 				provider: candidate,
-				modelId: currentModel.id,
+				modelId: getPoolMemberModel(pool, candidate, currentModel.id),
 				source: "pool",
 			});
 		}
@@ -3131,7 +3143,7 @@ class PoolManager {
 				candidates.push({
 					poolName: targetPool.name,
 					provider: member,
-					modelId: entry.model,
+					modelId: getPoolMemberModel(targetPool, member, entry.model),
 					source: "chain",
 					chainName: applicable.chain.name,
 					chainIndex,
@@ -3788,6 +3800,7 @@ async function showSubscriptionActions(
 		await createAndPersistPool(ctx, poolManager, {
 			allowOverwrite: true,
 			baseProvider: entry.provider,
+			mode: "same-provider",
 		});
 		return;
 	}
@@ -4098,6 +4111,67 @@ function getAllProvidersForBase(
 	return providers;
 }
 
+function getAllSelectableProviders(ctx: ExtensionCommandContext, allSubs: SubEntry[]): string[] {
+	const providers: string[] = [];
+	const seen = new Set<string>();
+	const push = (providerName: string) => {
+		if (seen.has(providerName)) return;
+		seen.add(providerName);
+		providers.push(providerName);
+	};
+	for (const providerName of SUPPORTED_PROVIDERS) {
+		push(providerName);
+	}
+	for (const entry of allSubs) {
+		push(subProviderName(entry));
+	}
+	return providers;
+}
+
+function getAuthedSelectableProviders(ctx: ExtensionCommandContext, allSubs: SubEntry[]): string[] {
+	return getAllSelectableProviders(ctx, allSubs).filter((providerName) =>
+		ctx.modelRegistry.authStorage.hasAuth(providerName),
+	);
+}
+
+function getProviderDisplay(ctx: ExtensionCommandContext, providerName: string, allSubs: SubEntry[]): string {
+	const sub = allSubs.find((entry) => subProviderName(entry) === providerName);
+	if (sub) return subDisplayName(sub);
+	return PROVIDER_TEMPLATES[providerName as keyof typeof PROVIDER_TEMPLATES]?.displayName || providerName;
+}
+
+function getSelectableModelsForProvider(
+	ctx: ExtensionContext | ExtensionCommandContext,
+	providerName: string,
+): string[] {
+	const registryModels = ctx.modelRegistry.getAll().filter((m) => m.provider === providerName) as Model<Api>[];
+	const baseProvider = getBaseProvider(providerName) || providerName;
+	const template = PROVIDER_TEMPLATES[baseProvider as keyof typeof PROVIDER_TEMPLATES];
+	const sourceProvider = template?.sourceProvider ?? baseProvider;
+	const systemModels = getModels(sourceProvider as any) as Model<Api>[];
+	const modelsJsonModels = loadModelsJsonProviderModels(sourceProvider);
+	const fallbackModels = template?.models || [];
+	return Array.from(
+		new Map([...registryModels, ...systemModels, ...modelsJsonModels, ...fallbackModels].map((m) => [m.id, m])).values(),
+	).map((m) => m.id);
+}
+
+function getDistinctBaseProviders(members: string[]): string[] {
+	return Array.from(new Set(members.map((member) => getBaseProvider(member) || member)));
+}
+
+function getPoolMemberModel(pool: PoolConfig, providerName: string, fallbackModelId: string): string {
+	return pool.memberModels?.[providerName] || fallbackModelId;
+}
+
+function formatProviderOption(ctx: ExtensionCommandContext, providerName: string, allSubs: SubEntry[]): SelectItem {
+	return {
+		value: providerName,
+		label: providerName,
+		description: `${getProviderDisplay(ctx, providerName, allSubs)} | ${ctx.modelRegistry.authStorage.hasAuth(providerName) ? "logged in" : "not logged in"}`,
+	};
+}
+
 function createPoolValidationMessage(members: string[]): string | null {
 	if (members.length < 1) {
 		return "Pool needs at least 1 member.";
@@ -4163,6 +4237,7 @@ function buildPoolConfig(input: {
 	members: string[];
 	enabled?: boolean;
 	strategy?: PoolStrategy;
+	memberModels?: Record<string, string>;
 	memberSchedule?: Record<string, MemberSchedule>;
 	selectorScript?: string;
 }): { ok: true; pool: PoolConfig } | { ok: false; error: string } {
@@ -4182,6 +4257,9 @@ function buildPoolConfig(input: {
 	};
 	if (input.strategy && input.strategy !== "round-robin") {
 		pool.strategy = input.strategy;
+	}
+	if (input.memberModels && Object.keys(input.memberModels).length > 0) {
+		pool.memberModels = input.memberModels;
 	}
 	if (input.memberSchedule && Object.keys(input.memberSchedule).length > 0) {
 		pool.memberSchedule = input.memberSchedule;
@@ -4294,7 +4372,7 @@ async function editPoolMembers(
 ): Promise<void> {
 	const envEntries = parseEnvConfig();
 	const allSubs = normalizeEntries(mergeConfigs(config, envEntries));
-	const availableProviders = getAllProvidersForBase(pool.baseProvider, allSubs);
+	const availableProviders = getAllSelectableProviders(ctx, allSubs);
 	const selectedMembers = [...pool.members];
 
 	while (true) {
@@ -4347,6 +4425,33 @@ async function editPoolMembers(
 				return;
 			}
 			pool.members = [...selectedMembers];
+			if (pool.memberModels) {
+				pool.memberModels = Object.fromEntries(
+					Object.entries(pool.memberModels).filter(([member]) => pool.members.includes(member)),
+				);
+			}
+			if (getDistinctBaseProviders(pool.members).length > 1) {
+				pool.memberModels = pool.memberModels || {};
+				for (const member of pool.members) {
+					if (pool.memberModels[member]) continue;
+					const models = getSelectableModelsForProvider(ctx, member);
+					if (models.length === 0) {
+						ctx.ui.notify(`No selectable models found for ${member}.`, "warning");
+						return;
+					}
+					const model = await showWrappedSelect(ctx, {
+						title: `Model for ${member}`,
+						subtitle: "Map this provider to the model to use when the pool rotates here.",
+						items: models.map((modelId) => ({ value: modelId, label: modelId })),
+						confirmHint: "select",
+						cancelHint: "back",
+					});
+					if (!model) return;
+					pool.memberModels[member] = model;
+				}
+			} else {
+				delete pool.memberModels;
+			}
 			saveGlobalConfig(config);
 			reloadPoolManagerForCurrentProject(ctx, poolManager);
 			ctx.ui.notify(
@@ -4378,6 +4483,7 @@ async function promptForPoolDefinition(
 		allowOverwrite?: boolean;
 		resumeChainName?: string;
 		baseProvider?: string;
+		mode?: PoolMode;
 	},
 ): Promise<PoolConfig | undefined> {
 	const config = loadGlobalConfig();
@@ -4390,67 +4496,135 @@ async function promptForPoolDefinition(
 		return undefined;
 	}
 
-	let baseProvider = requestedBaseProvider;
-	if (!baseProvider) {
-		const providerItems: SelectItem[] = SUPPORTED_PROVIDERS.map((p) => {
-			const t = PROVIDER_TEMPLATES[p];
-			return {
-				value: p,
-				label: p,
-				description: t?.displayName,
-			};
-		});
-		const selectedProvider = await showWrappedSelect(ctx, {
-			title: "Pool base provider",
-			subtitle: "Choose the provider family that will share one model across subscriptions.",
-			items: providerItems,
+	let mode = options?.mode;
+	if (!mode) {
+		const modePick = await showWrappedSelect(ctx, {
+			title: "Pool type",
+			subtitle: "Same-provider pools rotate accounts. Cross-provider pools rotate different providers.",
+			items: [
+				{
+					value: "same-provider",
+					label: "same-provider",
+					description: "Rotate multiple accounts for one provider family",
+				},
+				{
+					value: "cross-provider",
+					label: "cross-provider",
+					description: "Rotate different providers/accounts with model mapping",
+				},
+			],
 			confirmHint: "select",
 			cancelHint: "back",
 		});
-		if (!selectedProvider) return undefined;
-		baseProvider = selectedProvider;
+		if (!modePick) return undefined;
+		mode = modePick as PoolMode;
 	}
 
-	const poolName = await ctx.ui.input("Pool name", `e.g. ${baseProvider}-pool`);
-	if (!poolName?.trim()) return undefined;
+	let baseProvider = requestedBaseProvider;
+	let allProviders: string[];
+	let authedProviders: string[];
 
-	const allProviders = getAllProvidersForBase(baseProvider, allSubs);
-	const authedProviders = allProviders.filter((p) =>
-		ctx.modelRegistry.authStorage.hasAuth(p),
-	);
+	if (mode === "same-provider") {
+		if (!baseProvider) {
+			const providerItems: SelectItem[] = SUPPORTED_PROVIDERS.map((p) => {
+				const t = PROVIDER_TEMPLATES[p];
+				return {
+					value: p,
+					label: p,
+					description: t?.displayName,
+				};
+			});
+			const selectedProvider = await showWrappedSelect(ctx, {
+				title: "Pool base provider",
+				subtitle: "Choose the provider family that will share one model across subscriptions.",
+				items: providerItems,
+				confirmHint: "select",
+				cancelHint: "back",
+			});
+			if (!selectedProvider) return undefined;
+			baseProvider = selectedProvider;
+		}
 
-	if (authedProviders.length === 0) {
-		ctx.ui.notify(
-			`No authenticated ${baseProvider} subscriptions found. Login first with /subs login.`,
-			"warning",
+		allProviders = getAllProvidersForBase(baseProvider, allSubs);
+		authedProviders = allProviders.filter((p) =>
+			ctx.modelRegistry.authStorage.hasAuth(p),
 		);
-		return undefined;
+
+		if (authedProviders.length === 0) {
+			ctx.ui.notify(
+				`No authenticated ${baseProvider} subscriptions found. Login first with /subs login.`,
+				"warning",
+			);
+			return undefined;
+		}
+	} else {
+		authedProviders = getAuthedSelectableProviders(ctx, allSubs);
+		if (authedProviders.length === 0) {
+			ctx.ui.notify(
+				"No authenticated providers found. Login to at least one system provider or extra subscription first.",
+				"warning",
+			);
+			return undefined;
+		}
+		if (!baseProvider) {
+			const primary = await showWrappedSelect(ctx, {
+				title: "Primary provider",
+				subtitle: "Used as the pool base provider and default starting member.",
+				items: authedProviders.map((p) => formatProviderOption(ctx, p, allSubs)),
+				confirmHint: "select",
+				cancelHint: "back",
+			});
+			if (!primary) return undefined;
+			baseProvider = primary;
+		}
+		if (!authedProviders.includes(baseProvider)) {
+			ctx.ui.notify(`Primary provider is not authenticated: ${baseProvider}.`, "error");
+			return undefined;
+		}
+		allProviders = getAllSelectableProviders(ctx, allSubs);
 	}
+
+	const poolName = await ctx.ui.input(
+		"Pool name",
+		`e.g. ${mode === "cross-provider" ? `${baseProvider}-cross-pool` : `${baseProvider}-pool`}`,
+	);
+	if (!poolName?.trim()) return undefined;
 
 	const members: string[] = [];
 	let selecting = true;
 	while (selecting) {
-		const remaining = allProviders.filter((p) => !members.includes(p));
+		const remaining = allProviders
+			.filter((p) => authedProviders.includes(p))
+			.filter((p) => !members.includes(p));
 		if (remaining.length === 0) break;
 
-		const optionsList = [
-			`--- Selected (${members.length}): ${members.join(", ") || "none"} ---`,
-			...remaining.map((p) => {
-				const authed = ctx.modelRegistry.authStorage.hasAuth(p);
-				return `${p} ${authed ? "[logged in]" : "[not logged in]"}`;
-			}),
-			"[Done - create pool]",
+		const optionsList: SelectItem[] = [
+			{
+				value: "done",
+				label: `Done (${members.length} selected)`,
+				description: members.length > 0 ? members.join(", ") : "No members selected yet",
+			},
+			...remaining.map((p) => ({
+				value: p,
+				label: p,
+				description: `${getProviderDisplay(ctx, p, allSubs)} | logged in`,
+			})),
 		];
 
-		const picked = await ctx.ui.select("Add members ([Done] saves, Esc cancels)", optionsList);
+		const picked = await showWrappedSelect(ctx, {
+			title: "Pool members",
+			subtitle: mode === "cross-provider"
+				? "Select system providers and/or extra subscriptions for cross-provider failover."
+				: "Select members from the same provider family.",
+			items: optionsList,
+			confirmHint: "select",
+			cancelHint: "back",
+		});
 		if (!picked) {
 			ctx.ui.notify(`Cancelled pool creation${poolName ? ` for "${poolName}"` : ""}.`, "info");
 			return undefined;
 		}
-		if (picked.startsWith("---")) {
-			continue;
-		}
-		if (picked === "[Done - create pool]") {
+		if (picked === "done") {
 			if (members.length === 0) {
 				ctx.ui.notify("Select at least one member.", "warning");
 				continue;
@@ -4458,10 +4632,34 @@ async function promptForPoolDefinition(
 			selecting = false;
 			continue;
 		}
+		if (remaining.includes(picked)) {
+			members.push(picked);
+		}
+	}
 
-		const provName = picked.split(" ")[0];
-		if (provName && allProviders.includes(provName)) {
-			members.push(provName);
+	if (mode === "cross-provider" && getDistinctBaseProviders(members).length < 2) {
+		ctx.ui.notify("Cross-provider pool needs at least two different providers.", "warning");
+		return undefined;
+	}
+
+	const memberModels: Record<string, string> = {};
+	const needsMemberModels = getDistinctBaseProviders(members).length > 1;
+	if (needsMemberModels) {
+		for (const member of members) {
+			const models = getSelectableModelsForProvider(ctx, member);
+			if (models.length === 0) {
+				ctx.ui.notify(`No selectable models found for ${member}.`, "warning");
+				return undefined;
+			}
+			const model = await showWrappedSelect(ctx, {
+				title: `Model for ${member}`,
+				subtitle: "Map this provider to the model to use when the pool rotates here.",
+				items: models.map((modelId) => ({ value: modelId, label: modelId })),
+				confirmHint: "select",
+				cancelHint: "back",
+			});
+			if (!model) return undefined;
+			memberModels[member] = model;
 		}
 	}
 
@@ -4542,6 +4740,7 @@ async function promptForPoolDefinition(
 		members,
 		enabled: true,
 		strategy,
+		memberModels: needsMemberModels ? memberModels : undefined,
 		memberSchedule,
 		selectorScript,
 	});
@@ -4579,6 +4778,8 @@ async function createAndPersistPool(
 	options?: {
 		allowOverwrite?: boolean;
 		resumeChainName?: string;
+		baseProvider?: string;
+		mode?: PoolMode;
 	},
 ): Promise<PoolConfig | undefined> {
 	const pool = await promptForPoolDefinition(ctx, options);
@@ -4599,13 +4800,24 @@ async function createAndPersistPool(
 	return pool;
 }
 
-function getSelectableModelsForPool(pool: PoolConfig): string[] {
+function getSelectableModelsForPool(
+	pool: PoolConfig,
+	ctx?: ExtensionCommandContext,
+): string[] {
+	if (ctx) {
+		return Array.from(
+			new Set(
+				pool.members.flatMap((providerName) => getSelectableModelsForProvider(ctx, providerName)),
+			),
+		);
+	}
 	return (getModels(pool.baseProvider as any) as Model<Api>[]).map((model) => model.id);
 }
 
 function createChainValidationError(
 	config: MultiPassConfig,
 	chain: ChainConfig,
+	ctx?: ExtensionCommandContext,
 ): string | null {
 	if (!chain.name.trim()) {
 		return "Chain name is required.";
@@ -4622,7 +4834,7 @@ function createChainValidationError(
 		if (!pool) {
 			return `Chain entry pool "${entry.pool}" does not exist.`;
 		}
-		const selectableModels = getSelectableModelsForPool(pool);
+		const selectableModels = getSelectableModelsForPool(pool, ctx);
 		if (selectableModels.length === 0) {
 			return `Pool "${pool.name}" has no selectable models for ${pool.baseProvider}.`;
 		}
@@ -4637,13 +4849,14 @@ function createChainValidationError(
 function buildChainConfig(
 	config: MultiPassConfig,
 	input: { name: string; entries: ChainEntryConfig[]; enabled?: boolean },
+	ctx?: ExtensionCommandContext,
 ): { ok: true; chain: ChainConfig } | { ok: false; error: string } {
 	const chain: ChainConfig = {
 		name: input.name.trim(),
 		entries: input.entries.map((entry) => ({ ...entry })),
 		enabled: input.enabled ?? true,
 	};
-	const validationError = createChainValidationError(config, chain);
+	const validationError = createChainValidationError(config, chain, ctx);
 	if (validationError) {
 		return { ok: false, error: validationError };
 	}
@@ -5046,6 +5259,9 @@ function formatPoolStatusLines(
 	if (pool.selectorScript) {
 		lines.push(`selector: ${pool.selectorScript}`);
 	}
+	if (pool.memberModels) {
+		lines.push(`member models: ${pool.members.map((member) => `${member}->${pool.memberModels?.[member] || "<unmapped>"}`).join(", ")}`);
+	}
 	if (pool.members.length === 0) {
 		lines.push("  [no members configured]");
 		return lines;
@@ -5427,7 +5643,7 @@ async function handlePoolChainCreate(
 			continue;
 		}
 
-		const selectableModels = getSelectableModelsForPool(pool);
+		const selectableModels = getSelectableModelsForPool(pool, ctx);
 		if (selectableModels.length === 0) {
 			ctx.ui.notify(
 				`Pool "${pool.name}" has no selectable models for ${pool.baseProvider}.`,
@@ -5454,7 +5670,7 @@ async function handlePoolChainCreate(
 		name: chainName.trim(),
 		entries,
 		enabled: true,
-	});
+	}, ctx);
 	if (!built.ok) {
 		ctx.ui.notify(built.error, "warning");
 		return;
