@@ -23,6 +23,7 @@ pi install git:github.com/hjanuschka/pi-multi-pass
 - **Model presets**: Named routing shortcuts across providers (`/mp-preset coding-premium`)
 - **Built-in limits checks**: Inspect subscription headroom across accounts with `/subs limits`
 - **Smarter retries**: Preserve failover progress across internal replay retries
+- **Additional providers**: OpenRouter, Cloudflare AI Gateway, Hugging Face, Mistral, Together AI, and Cohere
 - **Project affinity**: Restrict which subs/pools/chains are used per project
 - **TUI management**: `/subs`, `/pool`, and `/mp-preset` commands -- no config files needed
 - **Labels**: Tag subscriptions (e.g. "work", "personal")

@@ -26,14 +26,20 @@
  *   - Leave pools empty to inherit global pools
  *
  * Supported providers:
- *   - anthropic          (Claude Pro/Max)
- *   - openai-codex       (ChatGPT Plus/Pro Codex)
- *   - github-copilot     (GitHub Copilot)
- *   - google-gemini-cli  (Google Cloud Code Assist)
- *   - google-antigravity (Antigravity)
- * - nvidia (NVIDIA AI Foundry / NIM)
- * - morph-llm (Morph LLM)
- * - siliconflow (SiliconFlow)
+ *   - anthropic             (Claude Pro/Max)
+ *   - openai-codex          (ChatGPT Plus/Pro Codex)
+ *   - github-copilot        (GitHub Copilot)
+ *   - google-gemini-cli     (Google Cloud Code Assist)
+ *   - google-antigravity    (Antigravity)
+ *   - nvidia                (NVIDIA AI Foundry / NIM)
+ *   - morph-llm             (Morph LLM)
+ *   - siliconflow           (SiliconFlow)
+ *   - openrouter            (OpenRouter)
+ *   - cloudflare-ai-gateway (Cloudflare AI Gateway)
+ *   - huggingface           (Hugging Face Inference Router)
+ *   - mistral               (Mistral AI)
+ *   - together              (Together AI)
+ *   - cohere                (Cohere)
  */
 
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from "fs";
@@ -93,9 +99,82 @@ interface ProviderTemplate {
 	displayName: string;
 	builtinOAuth: OAuthProviderInterface;
 	usesCallbackServer?: boolean;
-	useOAuth?: boolean; models?: Model<Api>[];
+	useOAuth?: boolean;
+	models?: Model<Api>[];
+	sourceProvider?: string;
 	buildOAuth(index: number): Omit<OAuthProviderInterface, "id">;
 	buildModifyModels?(providerName: string): OAuthProviderInterface["modifyModels"];
+}
+
+function apiKeyOAuthProvider(providerName: string, displayName: string): OAuthProviderInterface {
+	return {
+		id: providerName,
+		name: displayName,
+		async login(): Promise<OAuthCredentials> {
+			throw new Error(`${displayName} uses API key, not OAuth.`);
+		},
+		async refreshToken(credentials: OAuthCredentials): Promise<OAuthCredentials> {
+			return credentials;
+		},
+		getApiKey(credentials: OAuthCredentials): string {
+			return credentials.access;
+		},
+	};
+}
+
+function buildApiKeyOAuthProvider(
+	index: number,
+	displayName: string,
+	prompt: string,
+	requiredMessage: string,
+): Omit<OAuthProviderInterface, "id"> {
+	return {
+		name: `${displayName} #${index}`,
+		async login(callbacks: OAuthLoginCallbacks): Promise<OAuthCredentials> {
+			const apiKey = await callbacks.onPrompt({
+				message: `${prompt} for subscription #${index}:`,
+			});
+			if (!apiKey?.trim()) {
+				throw new Error(requiredMessage);
+			}
+			return {
+				access: apiKey.trim(),
+				refresh: "",
+				expires: Date.now() + 365 * 24 * 60 * 60 * 1000,
+			};
+		},
+		async refreshToken(credentials: OAuthCredentials): Promise<OAuthCredentials> {
+			return credentials;
+		},
+		getApiKey(credentials: OAuthCredentials): string {
+			return credentials.access;
+		},
+	};
+}
+
+function providerModel(
+	provider: string,
+	id: string,
+	name: string,
+	api: Api,
+	baseUrl: string,
+	reasoning: boolean,
+	input: ("text" | "image")[] = ["text"],
+	contextWindow = 128000,
+	maxTokens = 4096,
+): Model<Api> {
+	return {
+		id,
+		name,
+		provider,
+		api,
+		baseUrl,
+		reasoning,
+		input,
+		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+		contextWindow,
+		maxTokens,
+	};
 }
 
 
@@ -592,6 +671,131 @@ const PROVIDER_TEMPLATES: Record<string, ProviderTemplate> = {
           return credentials.access;
         },
       };
+    },
+  },
+
+  openrouter: {
+    displayName: "OpenRouter",
+    useOAuth: false,
+    models: [
+      providerModel("openrouter", "openai/gpt-5", "OpenAI GPT-5", "openai-completions", "https://openrouter.ai/api/v1", false, ["text", "image"], 400000, 128000),
+      providerModel("openrouter", "openai/gpt-5-mini", "OpenAI GPT-5 Mini", "openai-completions", "https://openrouter.ai/api/v1", false, ["text", "image"], 400000, 128000),
+      providerModel("openrouter", "anthropic/claude-opus-4.1", "Anthropic Claude Opus 4.1", "openai-completions", "https://openrouter.ai/api/v1", true, ["text", "image"], 400000, 64000),
+      providerModel("openrouter", "anthropic/claude-sonnet-4.5", "Anthropic Claude Sonnet 4.5", "openai-completions", "https://openrouter.ai/api/v1", true, ["text", "image"], 400000, 64000),
+      providerModel("openrouter", "google/gemini-2.5-pro", "Google Gemini 2.5 Pro", "openai-completions", "https://openrouter.ai/api/v1", true, ["text", "image"], 2097152, 65536),
+      providerModel("openrouter", "qwen/qwen3.5-397b-a17b", "Qwen 3.5 397B A17B", "openai-completions", "https://openrouter.ai/api/v1", true, ["text"], 262144, 65536),
+    ],
+    builtinOAuth: apiKeyOAuthProvider("openrouter", "OpenRouter"),
+    buildOAuth(index: number) {
+      return buildApiKeyOAuthProvider(
+        index,
+        "OpenRouter",
+        "Enter OpenRouter API key",
+        "OpenRouter API key is required.",
+      );
+    },
+  },
+
+  "cloudflare-ai-gateway": {
+    displayName: "Cloudflare AI Gateway",
+    useOAuth: false,
+    models: [
+      providerModel("cloudflare-ai-gateway", "claude-3.5-sonnet", "Claude Sonnet 3.5 v2", "anthropic-messages", "https://gateway.ai.cloudflare.com/v1/{CLOUDFLARE_ACCOUNT_ID}/{CLOUDFLARE_GATEWAY_ID}/anthropic", false, ["text", "image"], 200000, 8192),
+      providerModel("cloudflare-ai-gateway", "claude-3.5-haiku", "Claude Haiku 3.5 (latest)", "anthropic-messages", "https://gateway.ai.cloudflare.com/v1/{CLOUDFLARE_ACCOUNT_ID}/{CLOUDFLARE_GATEWAY_ID}/anthropic", false, ["text", "image"], 200000, 8192),
+      providerModel("cloudflare-ai-gateway", "claude-sonnet-4", "Claude Sonnet 4 (latest)", "anthropic-messages", "https://gateway.ai.cloudflare.com/v1/{CLOUDFLARE_ACCOUNT_ID}/{CLOUDFLARE_GATEWAY_ID}/anthropic", true, ["text", "image"], 200000, 64000),
+      providerModel("cloudflare-ai-gateway", "gpt-4o", "GPT-4o", "openai-completions", "https://gateway.ai.cloudflare.com/v1/{CLOUDFLARE_ACCOUNT_ID}/{CLOUDFLARE_GATEWAY_ID}/openai/v1", false, ["text", "image"], 128000, 16384),
+      providerModel("cloudflare-ai-gateway", "gpt-4.1", "GPT-4.1", "openai-completions", "https://gateway.ai.cloudflare.com/v1/{CLOUDFLARE_ACCOUNT_ID}/{CLOUDFLARE_GATEWAY_ID}/openai/v1", false, ["text", "image"], 1047576, 32768),
+    ],
+    builtinOAuth: apiKeyOAuthProvider("cloudflare-ai-gateway", "Cloudflare AI Gateway"),
+    buildOAuth(index: number) {
+      return buildApiKeyOAuthProvider(
+        index,
+        "Cloudflare AI Gateway",
+        "Enter Cloudflare AI Gateway API key",
+        "Cloudflare AI Gateway API key is required.",
+      );
+    },
+  },
+
+  huggingface: {
+    displayName: "Hugging Face Inference Router",
+    useOAuth: false,
+    models: [
+      providerModel("huggingface", "MiniMaxAI/MiniMax-M2.7", "MiniMax M2.7", "openai-completions", "https://router.huggingface.co/v1", true, ["text"], 204800, 131072),
+      providerModel("huggingface", "Qwen/Qwen3-235B-A22B-Thinking-2507", "Qwen3 235B Thinking 2507", "openai-completions", "https://router.huggingface.co/v1", true, ["text"], 262144, 131072),
+      providerModel("huggingface", "Qwen/Qwen3-Coder-480B-A35B-Instruct", "Qwen3 Coder 480B Instruct", "openai-completions", "https://router.huggingface.co/v1", false, ["text"], 262144, 66536),
+      providerModel("huggingface", "deepseek-ai/DeepSeek-V4-Pro", "DeepSeek V4 Pro", "openai-completions", "https://router.huggingface.co/v1", false, ["text"], 262144, 65536),
+      providerModel("huggingface", "moonshotai/Kimi-K2.6", "Kimi K2.6", "openai-completions", "https://router.huggingface.co/v1", false, ["text"], 262144, 65536),
+    ],
+    builtinOAuth: apiKeyOAuthProvider("huggingface", "Hugging Face Inference Router"),
+    buildOAuth(index: number) {
+      return buildApiKeyOAuthProvider(
+        index,
+        "Hugging Face Inference Router",
+        "Enter Hugging Face API key",
+        "Hugging Face API key is required.",
+      );
+    },
+  },
+
+  mistral: {
+    displayName: "Mistral AI",
+    useOAuth: false,
+    models: [
+      providerModel("mistral", "mistral-large-latest", "Mistral Large Latest", "mistral-conversations", "https://api.mistral.ai", true, ["text", "image"], 256000, 128000),
+      providerModel("mistral", "mistral-small-latest", "Mistral Small Latest", "mistral-conversations", "https://api.mistral.ai", false, ["text"], 256000, 128000),
+      providerModel("mistral", "pixtral-large-latest", "Pixtral Large Latest", "mistral-conversations", "https://api.mistral.ai", true, ["text", "image"], 256000, 128000),
+      providerModel("mistral", "codestral-latest", "Codestral Latest", "mistral-conversations", "https://api.mistral.ai", false, ["text"], 256000, 4096),
+      providerModel("mistral", "devstral-latest", "Devstral Latest", "mistral-conversations", "https://api.mistral.ai", false, ["text"], 262144, 262144),
+    ],
+    builtinOAuth: apiKeyOAuthProvider("mistral", "Mistral AI"),
+    buildOAuth(index: number) {
+      return buildApiKeyOAuthProvider(
+        index,
+        "Mistral AI",
+        "Enter Mistral AI API key",
+        "Mistral AI API key is required.",
+      );
+    },
+  },
+
+  together: {
+    displayName: "Together AI",
+    useOAuth: false,
+    models: [
+      providerModel("together", "Qwen/Qwen3.5-397B-A17B", "Qwen 3.5 397B A17B", "openai-completions", "https://api.together.xyz/v1", true, ["text"], 262144, 65536),
+      providerModel("together", "Qwen/Qwen3-235B-A22B-Instruct-2507-tput", "Qwen3 235B Instruct 2507 Tput", "openai-completions", "https://api.together.xyz/v1", true, ["text"], 262144, 65536),
+      providerModel("together", "deepseek-ai/DeepSeek-V4-Pro", "DeepSeek V4 Pro", "openai-completions", "https://api.together.xyz/v1", false, ["text"], 262144, 65536),
+      providerModel("together", "moonshotai/Kimi-K2.6", "Kimi K2.6", "openai-completions", "https://api.together.xyz/v1", false, ["text"], 262144, 65536),
+      providerModel("together", "openai/gpt-oss-120b", "OpenAI GPT-OSS 120B", "openai-completions", "https://api.together.xyz/v1", true, ["text"], 200000, 65536),
+    ],
+    builtinOAuth: apiKeyOAuthProvider("together", "Together AI"),
+    buildOAuth(index: number) {
+      return buildApiKeyOAuthProvider(
+        index,
+        "Together AI",
+        "Enter Together AI API key",
+        "Together AI API key is required.",
+      );
+    },
+  },
+
+  cohere: {
+    displayName: "Cohere",
+    useOAuth: false,
+    models: [
+      providerModel("cohere", "command-a", "Command A", "openai-completions", "https://api.cohere.com/compat/v1", false, ["text"], 256000, 8000),
+      providerModel("cohere", "command-r-plus-08-2024", "Command R+ (08-2024)", "openai-completions", "https://api.cohere.com/compat/v1", false, ["text"], 128000, 4000),
+      providerModel("cohere", "command-r-08-2024", "Command R (08-2024)", "openai-completions", "https://api.cohere.com/compat/v1", false, ["text"], 128000, 4000),
+    ],
+    builtinOAuth: apiKeyOAuthProvider("cohere", "Cohere"),
+    buildOAuth(index: number) {
+      return buildApiKeyOAuthProvider(
+        index,
+        "Cohere",
+        "Enter Cohere API key",
+        "Cohere API key is required.",
+      );
     },
   },
 };
@@ -1783,10 +1987,13 @@ function collectModelsForProvider(
 	ctx: ExtensionCommandContext,
 	providerName: string,
 ): Model<Api>[] {
-	const registryModels = ctx.modelRegistry.getAll().filter((m) => m.provider === providerName) as Model<Api>[];
-	const modelsJsonModels = loadModelsJsonProviderModels(providerName);
-	const systemModels = getModels(providerName as any) as Model<Api>[];
 	const template = PROVIDER_TEMPLATES[providerName as keyof typeof PROVIDER_TEMPLATES];
+	const sourceProvider = template?.sourceProvider ?? providerName;
+	const aliasProvider = sourceProvider === providerName ? undefined : providerName;
+	const providers = aliasProvider ? [sourceProvider, aliasProvider] : [sourceProvider];
+	const registryModels = ctx.modelRegistry.getAll().filter((m) => providers.includes(m.provider)) as Model<Api>[];
+	const modelsJsonModels = providers.flatMap((provider) => loadModelsJsonProviderModels(provider));
+	const systemModels = providers.flatMap((provider) => getModels(provider as any) as Model<Api>[]);
 	const templateModels = template?.models || [];
 	return Array.from(
 		new Map([...registryModels, ...modelsJsonModels, ...systemModels, ...templateModels].map((m) => [m.id, m])).values(),
@@ -1797,20 +2004,28 @@ async function handleSubsModels(pi: ExtensionAPI, ctx: ExtensionCommandContext):
 	const config = loadGlobalConfig();
 	const envEntries = parseEnvConfig();
 	const allSubs = normalizeEntries(mergeConfigs(config, envEntries));
-	const providerOptions = [
+	const providerOptions: SelectItem[] = [
 		...SUPPORTED_PROVIDERS.map((p) => {
 			const template = PROVIDER_TEMPLATES[p as keyof typeof PROVIDER_TEMPLATES];
 			const displayName = ctx.modelRegistry.getProviderDisplayName(p);
-			return `${p} -- ${displayName || template?.displayName || p} (system)`;
+			return {
+				value: p,
+				label: p,
+				description: `${displayName || template?.displayName || p} (system)`,
+			};
 		}),
-		...allSubs.map((entry) => `${subProviderName(entry)} -- ${subDisplayName(entry)}`),
+		...allSubs.map((entry) => ({
+			value: subProviderName(entry),
+			label: subProviderName(entry),
+			description: subDisplayName(entry),
+		})),
 	];
 	const selected = await ctx.ui.select("Select provider to view models", providerOptions);
 	if (!selected) {
 		ctx.ui.notify("No provider selected.", "info");
 		return;
 	}
-	const providerName = selected.split(" -- ")[0].trim();
+	const providerName = selected;
 	const uniqueModels = collectModelsForProvider(ctx, providerName);
 	if (uniqueModels.length === 0) {
 		ctx.ui.notify(`No models found for provider "${providerName}".`, "warning");
@@ -2211,7 +2426,9 @@ function findSelectableModelForProvider(
 	if (!baseProvider) {
 		return undefined;
 	}
-	for (const baseModel of getModels(baseProvider as any) as Model<Api>[]) {
+	const template = PROVIDER_TEMPLATES[baseProvider as keyof typeof PROVIDER_TEMPLATES];
+	const sourceProvider = template?.sourceProvider ?? baseProvider;
+	for (const baseModel of getModels(sourceProvider as any) as Model<Api>[]) {
 		const candidate = ctx.modelRegistry.find(providerName, baseModel.id);
 		if (candidate) {
 			return candidate as Model<Api>;
@@ -2344,6 +2561,7 @@ function loadModelsJsonProviderModels(providerName: string): Model<Api>[] {
 				return {
 					id,
 					name: String(raw.name ?? id),
+					provider: providerName,
 					api: (raw.api as Api | undefined) ?? "openai-completions",
 					baseUrl: typeof raw.baseUrl === "string"
 						? raw.baseUrl
@@ -2381,10 +2599,20 @@ function cloneModels(
 	originalProvider: string,
 	index: number,
 	ctx?: ExtensionContext | ExtensionCommandContext,
+	aliasProvider?: string,
 ) {
-	const registryModels = getRegistryModelsForProvider(ctx, originalProvider);
-	const modelsJsonModels = loadModelsJsonProviderModels(originalProvider);
-	const systemModels = getModels(originalProvider as any) as Model<Api>[];
+	const registryModels = [
+		...getRegistryModelsForProvider(ctx, originalProvider),
+		...(aliasProvider ? getRegistryModelsForProvider(ctx, aliasProvider) : []),
+	];
+	const modelsJsonModels = [
+		...loadModelsJsonProviderModels(originalProvider),
+		...(aliasProvider ? loadModelsJsonProviderModels(aliasProvider) : []),
+	];
+	const systemModels = [
+		...getModels(originalProvider as any) as Model<Api>[],
+		...(aliasProvider ? getModels(aliasProvider as any) as Model<Api>[] : []),
+	];
 	const models = Array.from(
 		new Map([...registryModels, ...modelsJsonModels, ...systemModels].map((m) => [m.id, m])).values(),
 	) as Model<Api>[];
@@ -2392,6 +2620,7 @@ function cloneModels(
 		id: m.id,
 		name: `${m.name} (#${index})`,
 		api: m.api,
+		baseUrl: m.baseUrl,
 		reasoning: m.reasoning,
 		thinkingLevelMap: m.thinkingLevelMap ? { ...m.thinkingLevelMap } : undefined,
 		input: m.input as ("text" | "image")[],
@@ -2414,21 +2643,36 @@ function registerSub(pi: ExtensionAPI, entry: SubEntry, ctx?: ExtensionContext):
 	const name = subProviderName(entry);
 	const oauth = template.buildOAuth(entry.index);
 	const modifyModels = template.buildModifyModels?.(name);
-	const registryModels = getRegistryModelsForProvider(ctx, entry.provider);
-	const modelsJsonModels = loadModelsJsonProviderModels(entry.provider);
-	const builtinModels = getModels(entry.provider as any) as Model<Api>[];
-	const templateModels = template.models;
+	const sourceProvider = template.sourceProvider ?? entry.provider;
+	const aliasProvider = sourceProvider === entry.provider ? undefined : entry.provider;
+	const registryModels = [
+		...getRegistryModelsForProvider(ctx, sourceProvider),
+		...(aliasProvider ? getRegistryModelsForProvider(ctx, aliasProvider) : []),
+	];
+	const modelsJsonModels = [
+		...loadModelsJsonProviderModels(sourceProvider),
+		...(aliasProvider ? loadModelsJsonProviderModels(aliasProvider) : []),
+	];
+	const builtinModels = [
+		...getModels(sourceProvider as any) as Model<Api>[],
+		...(aliasProvider ? getModels(aliasProvider as any) as Model<Api>[] : []),
+	];
+	const templateModels = template.models || [];
 	const allBaseModels = Array.from(
 		new Map([...registryModels, ...modelsJsonModels, ...builtinModels].map((m) => [m.id, m])).values(),
 	) as Model<Api>[];
-	const baseUrl = allBaseModels[0]?.baseUrl || templateModels?.[0]?.baseUrl || "";
-	const models = allBaseModels.length > 0
-	  ? [...cloneModels(entry.provider, entry.index, ctx), ...(templateModels || [])]
-	  : (templateModels || []);
+	const baseUrl = allBaseModels[0]?.baseUrl || templateModels[0]?.baseUrl || "";
+	const api = builtinModels[0]?.api || templateModels[0]?.api;
+	const clonedModels = allBaseModels.length > 0
+		? cloneModels(sourceProvider, entry.index, ctx, aliasProvider)
+		: [];
+	const models = Array.from(
+		new Map([...clonedModels, ...templateModels].map((m) => [m.id, m])).values(),
+	) as Model<Api>[];
 
 	pi.registerProvider(name, {
 		baseUrl,
-		api: builtinModels[0]?.api,
+		api,
 		...(template.useOAuth !== false
 			? { oauth: modifyModels ? { ...oauth, modifyModels } : oauth }
 			: { apiKey: "placeholder" }),
@@ -3351,7 +3595,9 @@ function resolveSwitchTargetModel(
 	if (!baseProvider) {
 		return undefined;
 	}
-	for (const baseModel of getModels(baseProvider as any) as Model<Api>[]) {
+	const template = PROVIDER_TEMPLATES[baseProvider as keyof typeof PROVIDER_TEMPLATES];
+	const sourceProvider = template?.sourceProvider ?? baseProvider;
+	for (const baseModel of getModels(sourceProvider as any) as Model<Api>[]) {
 		const candidate = ctx.modelRegistry.find(providerName, baseModel.id);
 		if (candidate) {
 			return candidate as Model<Api>;
@@ -5742,7 +5988,9 @@ async function handlePresetCreate(
 		const base = getBaseProvider(provider);
 		if (!base) continue;
 
-		const models = (getModels(base as any) as Model<Api>[]).map((m) => m.id);
+		const template = PROVIDER_TEMPLATES[base as keyof typeof PROVIDER_TEMPLATES];
+		const sourceProvider = template?.sourceProvider ?? base;
+		const models = (getModels(sourceProvider as any) as Model<Api>[]).map((m) => m.id);
 		if (models.length === 0) {
 			ctx.ui.notify(`No models available for ${provider}.`, "warning");
 			continue;
