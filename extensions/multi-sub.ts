@@ -1783,11 +1783,12 @@ function collectModelsForProvider(
 	providerName: string,
 ): Model<Api>[] {
 	const registryModels = ctx.modelRegistry.getAll().filter((m) => m.provider === providerName) as Model<Api>[];
+	const modelsJsonModels = loadModelsJsonProviderModels(providerName);
 	const systemModels = getModels(providerName as any) as Model<Api>[];
 	const template = PROVIDER_TEMPLATES[providerName as keyof typeof PROVIDER_TEMPLATES];
 	const templateModels = template?.models || [];
 	return Array.from(
-		new Map([...registryModels, ...systemModels, ...templateModels].map((m) => [m.id, m])).values(),
+		new Map([...registryModels, ...modelsJsonModels, ...systemModels, ...templateModels].map((m) => [m.id, m])).values(),
 	) as Model<Api>[];
 }
 
@@ -2315,6 +2316,58 @@ function getBaseProvider(providerName: string): string | undefined {
 // Model cloning
 // ==========================================================================
 
+function stripJsonCommentsAndTrailingCommas(input: string): string {
+	return input
+		.replace(/"(?:\\.|[^"\\])*"|\/\/[^\n]*/g, (match) => (match.startsWith('"') ? match : ""))
+		.replace(/,(\s*[}\]])/g, "$1");
+}
+
+function loadModelsJsonProviderModels(providerName: string): Model<Api>[] {
+	const modelsPath = join(getAgentDir(), "models.json");
+	if (!existsSync(modelsPath)) return [];
+	try {
+		const parsed = JSON.parse(stripJsonCommentsAndTrailingCommas(readFileSync(modelsPath, "utf-8"))) as {
+			providers?: Record<string, { models?: unknown[] }>;
+		};
+		const models = parsed.providers?.[providerName]?.models;
+		if (!Array.isArray(models)) return [];
+		return models
+			.filter((raw): raw is Record<string, unknown> => typeof raw === "object" && raw !== null)
+			.map((raw) => {
+				const id = String(raw.id ?? "");
+				if (!id) return undefined;
+				const cost = typeof raw.cost === "object" && raw.cost !== null ? raw.cost as Record<string, unknown> : {};
+				const input = Array.isArray(raw.input)
+					? raw.input.map((value) => String(value)) as ("text" | "image")[]
+					: ["text"];
+				return {
+					id,
+					name: String(raw.name ?? id),
+					api: (raw.api as Api | undefined) ?? "openai-completions",
+					baseUrl: typeof raw.baseUrl === "string"
+						? raw.baseUrl
+						: providerName === "nvidia"
+							? "https://integrate.api.nvidia.com/v1"
+							: undefined,
+					reasoning: Boolean(raw.reasoning),
+					input,
+					cost: {
+						input: Number(cost.input ?? 0),
+						output: Number(cost.output ?? 0),
+						cacheRead: Number(cost.cacheRead ?? 0),
+						cacheWrite: Number(cost.cacheWrite ?? 0),
+					},
+					contextWindow: Number(raw.contextWindow ?? 0),
+					maxTokens: Number(raw.maxTokens ?? 0),
+					compat: raw.compat as Model<Api>["compat"],
+				};
+			})
+			.filter((model): model is Model<Api> => model !== undefined);
+	} catch {
+		return [];
+	}
+}
+
 function getRegistryModelsForProvider(
 	ctx: ExtensionContext | ExtensionCommandContext | undefined,
 	providerName: string,
@@ -2329,9 +2382,10 @@ function cloneModels(
 	ctx?: ExtensionContext | ExtensionCommandContext,
 ) {
 	const registryModels = getRegistryModelsForProvider(ctx, originalProvider);
+	const modelsJsonModels = loadModelsJsonProviderModels(originalProvider);
 	const systemModels = getModels(originalProvider as any) as Model<Api>[];
 	const models = Array.from(
-		new Map([...registryModels, ...systemModels].map((m) => [m.id, m])).values(),
+		new Map([...registryModels, ...modelsJsonModels, ...systemModels].map((m) => [m.id, m])).values(),
 	) as Model<Api>[];
 	return models.map((m) => ({
 		id: m.id,
@@ -2360,10 +2414,11 @@ function registerSub(pi: ExtensionAPI, entry: SubEntry, ctx?: ExtensionContext):
 	const oauth = template.buildOAuth(entry.index);
 	const modifyModels = template.buildModifyModels?.(name);
 	const registryModels = getRegistryModelsForProvider(ctx, entry.provider);
+	const modelsJsonModels = loadModelsJsonProviderModels(entry.provider);
 	const builtinModels = getModels(entry.provider as any) as Model<Api>[];
 	const templateModels = template.models;
 	const allBaseModels = Array.from(
-		new Map([...registryModels, ...builtinModels].map((m) => [m.id, m])).values(),
+		new Map([...registryModels, ...modelsJsonModels, ...builtinModels].map((m) => [m.id, m])).values(),
 	) as Model<Api>[];
 	const baseUrl = allBaseModels[0]?.baseUrl || templateModels?.[0]?.baseUrl || "";
 	const models = allBaseModels.length > 0
